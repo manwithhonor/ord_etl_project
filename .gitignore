@@ -1,0 +1,9 @@
+.env
+__pycache__/
+.pytest_cache/
+*.pyc
+state/*.sqlite3
+output/*.csv
+data/livedune_input.xlsx
+data/creative_mapping.csv
+data/state_bootstrap.csv
