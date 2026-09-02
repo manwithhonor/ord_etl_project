@@ -1,33 +1,231 @@
 # LiveDune -> Yandex ORD ETL
 
-Draft ETL for monthly self-promotion statistics.
+Черновой Python ETL-проект для ежемесячной передачи статистики по саморекламе.
 
-## Core idea
+## Что уже подтверждено
 
-LiveDune post views/impressions are treated as a cumulative counter. The script stores the cumulative snapshot used for each reporting month in SQLite and sends only the difference from the prior monthly snapshot. The same `statistics_id` is deterministic for `(month, creative, platform)`.
+### Excel из LiveDune
 
-This avoids relying on downloading historical statistics from Yandex ORD. Current public Swagger exposes POST `/statistics` but does not show a historical statistics GET/list endpoint.
+Был проверен реальный экспорт из LiveDune. Скрипт читает:
 
-## First setup
+- лист: `Посты`
+- дату публикации: `Дата`
+- ссылку на пост: `Ссылка`
+- накопительное количество просмотров: `Просмотров`
 
-1. `python -m venv .venv`
-2. Activate it and run `pip install -r requirements.txt`.
-3. Copy `.env.example` to `.env`, add tokens.
-4. Export LiveDune to `data/livedune_input.xlsx` or switch `livedune.mode` to `api` after verifying your LiveDune API route/field names.
-5. Copy `data/creative_mapping.example.csv` to `data/creative_mapping.csv` and map each post to Yandex ORD `creative_id` and `platform_id`.
-6. If creatives existed before the first automated month, prepare `data/state_bootstrap.csv` from previous reporting. `source_cumulative` must be the cumulative number of impressions already accounted for before the new month.
-7. Run safe preview: `python main.py --report-month 2026-08`.
-8. Check `output/ord_statistics_preview.csv`.
-9. Verify the current v8 POST `/statistics` schema. Update `yandex.statistics_payload.field_map`, set `schema_verified: true`.
-10. Real send: `python main.py --report-month 2026-08 --live`.
+В экспорте также присутствует итоговая строка `Итого:`. Скрипт автоматически её отфильтровывает.
 
-## Important unknowns to verify
+Важный нюанс для VK: идентификатор конкретного поста в таком экспорте находится в query-параметре ссылки, например:
 
-- Exact current LiveDune endpoint and response field containing post views for your social network/account.
-- Exact current Yandex ORD v8 statistics payload, especially VAT fields.
-- Whether your ORD statistics endpoint needs the client-created `creative_id` or can accept only a token/erid. Older API examples use `creativeId`.
-- A stable mapping LiveDune post -> ORD creative + ORD platform.
+`https://vk.com/psb_prosperity?w=wall-239175161_233`
 
-## Tests
+Поэтому нормализатор URL **сохраняет** значимые query-параметры, такие как `w`, и удаляет только служебные параметры отслеживания вида `utm_*`.
 
-`pytest -q`
+Без этого исправления все VK-посты могли бы ошибочно преобразоваться в одну и ту же ссылку.
+
+### Payload статистики Yandex ORD API v8
+
+Проект теперь формирует подтверждённую структуру для API v8:
+
+```json
+{
+  "statistics": [
+    {
+      "amount": {
+        "excludingVat": "0",
+        "includingVat": "0",
+        "vat": "0",
+        "vatRate": "0"
+      },
+      "amountPerUnit": "0",
+      "creativeId": "creative-1",
+      "dateEndFact": "2026-08-31",
+      "dateEndPlan": "2026-08-31",
+      "dateStartFact": "2026-08-01",
+      "dateStartPlan": "2026-08-01",
+      "impsFact": 123,
+      "impsPlan": 123,
+      "platformId": "platform-1",
+      "type": "other"
+    }
+  ]
+}
+```
+
+Для саморекламы все денежные показатели и НДС равны нулю.
+
+Значение `Иное` из интерфейса ОРД передаётся в API как enum:
+
+`other`
+
+Загрузчик отправляет **один пост за один HTTP-запрос**.
+
+При этом API v8 требует, чтобы на верхнем уровне находился массив `statistics`, поэтому каждый запрос содержит массив ровно из одного объекта.
+
+## Логика расчёта дельты
+
+Поле `Просмотров` в LiveDune считается накопительным счётчиком.
+
+Для старого креатива:
+
+`показы_к_отправке = текущие_просмотры_LiveDune - накопительные_просмотры_уже_учтённые_ранее`
+
+Пример:
+
+- по июль включительно уже было учтено: 12 500
+- LiveDune на момент сдачи августовской отчётности показывает: 14 300
+- значение для передачи в ОРД за август: 1 800
+
+После успешного POST-запроса значение `14 300` сохраняется в SQLite и становится новой базовой точкой для следующего отчётного месяца.
+
+Для креатива, опубликованного в текущем отчётном месяце, предыдущий baseline считается равным нулю, а датой начала показа становится дата публикации.
+
+Для более старого креатива датой начала показа становится первое число отчётного месяца.
+
+## Ручной mapping
+
+Схема API использует `creativeId`, а не отображаемый токен / erid.
+
+Поэтому проекту требуется ручная таблица соответствия между URL поста из LiveDune и объектами ОРД.
+
+Скопируйте файл:
+
+`data/creative_mapping.example.csv`
+
+в:
+
+`data/creative_mapping.csv`
+
+Формат:
+
+```csv
+post_url,creative_id,creative_token,platform_id,enabled
+https://vk.com/example?w=wall-1_100,creative-100,optional-erid,platform-vk,true
+```
+
+Поле `creative_token` необязательное и хранится только для удобства человека.
+
+В POST-запрос статистики используются:
+
+- `creative_id`
+- `platform_id`
+
+Обрабатываются только строки, в которых заполнены и `creative_id`, и `platform_id`.
+
+Посты из LiveDune без mapping игнорируются, поэтому **не нужно сопоставлять каждый обычный пост из экспорта**.
+
+При каждом запуске скрипт также создаёт:
+
+`output/creative_mapping_to_fill.csv`
+
+Это вспомогательная таблица со всеми постами LiveDune и пустыми колонками mapping, чтобы было проще вручную заполнить необходимые идентификаторы.
+
+В архиве проекта уже находится файл:
+
+`data/creative_mapping_to_fill.csv`
+
+Он был автоматически сформирован на основе предоставленного реального экспорта LiveDune и содержит 40 строк с постами, для которых можно вручную заполнить:
+
+- `creative_id`
+- `platform_id`
+
+## Начальный baseline
+
+Для креативов, которые существовали до первого месяца автоматической отчётности, необходимо создать файл:
+
+`data/state_bootstrap.csv`
+
+Рекомендуемый формат:
+
+```csv
+creative_id,platform_id,report_month,source_cumulative
+creative-100,platform-vk,2026-07,12500
+```
+
+`source_cumulative` — это накопительное количество просмотров LiveDune, которое уже было учтено в отчётности по состоянию на указанный месяц.
+
+Новые креативы, опубликованные непосредственно в текущем отчётном месяце, не требуют предыдущего baseline.
+
+## Запуск
+
+1. Создать виртуальное окружение:
+
+   `python -m venv .venv`
+
+2. Установить зависимости:
+
+   `pip install -r requirements.txt`
+
+3. Скопировать:
+
+   `.env.example`
+
+   в:
+
+   `.env`
+
+4. Поместить экспорт LiveDune в:
+
+   `data/livedune_input.xlsx`
+
+5. Подготовить:
+
+   `data/creative_mapping.csv`
+
+6. Для старых креативов подготовить:
+
+   `data/state_bootstrap.csv`
+
+7. Выполнить безопасный предварительный запуск:
+
+   `python main.py --report-month 2026-08`
+
+8. Проверить сформированный файл:
+
+   `output/ord_statistics_preview.csv`
+
+9. Выполнить реальную отправку данных:
+
+   `python main.py --report-month 2026-08 --live`
+
+По умолчанию в конфигурации остаётся:
+
+`dry_run: true`
+
+Это сделано в целях безопасности, чтобы данные нельзя было случайно отправить в ОРД.
+
+## API-режим LiveDune
+
+Работа через Excel сейчас является поддерживаемым и проверенным вариантом Extract.
+
+Режим:
+
+`livedune.mode: api`
+
+пока остаётся черновым, поскольку необходимо дополнительно подтвердить конкретный API endpoint LiveDune, через который для используемого аккаунта и тарифного плана можно получать статистику просмотров постов.
+
+## Тесты
+
+Для запуска тестов:
+
+```bash
+pytest -q
+```
+
+Тесты проверяют:
+
+- черновую реализацию авторизации и пагинации LiveDune API;
+- реальную структуру Excel из LiveDune:
+  - лист `Посты`;
+  - колонка `Дата`;
+  - колонка `Ссылка`;
+  - колонка `Просмотров`;
+- автоматическое удаление строки `Итого:`;
+- нормализацию VK URL без удаления параметра `?w=wall...`;
+- расчёт месячной дельты просмотров;
+- точную структуру payload `statistics` для API v8;
+- нулевые значения НДС и стоимости;
+- значение `type=other`;
+- построчную отправку статистики;
+- сохранение локального snapshot после успешной отправки;
+- полный тестовый запуск `main.py` в режиме `dry-run`.

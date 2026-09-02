@@ -4,19 +4,18 @@ app:
   force_recalculate: false
   skip_zero_impressions: true
   log_level: INFO
-  preview_csv: output/ord_statistics_preview.csv
+  preview_csv: statics/ord_statistics_preview.csv
 
 livedune:
-  # API works only on plans that include API access. If exact endpoint/fields differ,
-  # keep mode=excel and feed the exported LiveDune workbook.
+  # Real export for this project was verified in Excel mode:
+  # sheet "Посты", columns "Дата" + "Ссылка" + "Просмотров".
   mode: excel                    # excel | api
   base_url: "https://api.livedune.com"
   api_token_env: LIVEDUNE_API_TOKEN
   timeout_seconds: 30
   account_ids: []
   accounts_endpoint: "/accounts"
-  # Historical public examples of LiveDune API use /accounts/{account_id}/posts.
-  # Verify this route in your current LiveDune API account before switching mode=api.
+  # API mode is still a draft until the exact LiveDune analytics route is confirmed.
   posts_endpoint: "/accounts/{account_id}/posts"
   auth:
     style: query                 # query | bearer
@@ -27,64 +26,19 @@ livedune:
     cursor_param: after
   excel:
     path: data/livedune_input.xlsx
-    sheet_name: 0
+    sheet_name: "Посты"
+    dayfirst: true
   column_aliases:
     source_post_id: [source_post_id, post_id, id, ID]
     post_url: [post_url, url, URL, "Ссылка", "Ссылка на публикацию"]
     published_at: [published_at, created, date, "Дата", "Дата публикации"]
-    impressions_total: [impressions_total, views, impressions, "Просмотры", "Показы"]
+    impressions_total: [impressions_total, views, impressions, "Просмотров", "Просмотры", "Показы"]
     account_id: [account_id, account, profile, "Аккаунт"]
 
-mapping:
-  # Critical bridge between a LiveDune post and already-created ORD objects.
-  path: data/creative_mapping.csv
-  key: post_url
-
-state:
-  sqlite_path: state/etl_state.sqlite3
-  # Optional one-time bootstrap of previous reporting snapshots.
-  bootstrap_csv: data/state_bootstrap.csv
-  # For an old creative, do not assume previous reported impressions were zero.
-  initial_state_policy: require_bootstrap   # require_bootstrap | assume_zero
-  require_previous_month_snapshot: true
-  negative_delta_policy: error             # error | clamp_zero
-
-transform:
-  campaign_type_value: "Иное"
-
 yandex:
-  base_url: "https://ord.yandex.net"
-  api_version: v8
-  oauth_token_env: YANDEX_ORD_OAUTH_TOKEN
+  base_url: "https://ord.yandex.net/api/v8"
+  token: YANDEX_ORD_OAUTH_TOKEN
   timeout_seconds: 30
   endpoints:
     statistics: "/api/{api_version}/statistics"
     status: "/api/{api_version}/status"
-  status_poll:
-    enabled: true
-    interval_seconds: 2
-    timeout_seconds: 30
-    terminal_statuses: ["ORD success", "ERIR success", "ORD error", "ERIR error"]
-    error_statuses: ["ORD error", "ERIR error"]
-
-  # IMPORTANT. The attached PDF documents v4 while public Swagger now exposes v7/v8.
-  # The old schema is known to use the field names below. Verify v8 Swagger before live load.
-  require_schema_verified: true
-  statistics_payload:
-    schema_verified: false
-    field_map:
-      id: statistics_id
-      creativeId: creative_id
-      platformId: platform_id
-      impsFact: impsFact
-      impsPlan: impsPlan
-      dateStartFact: dateStartFact
-      dateStartPlan: dateStartPlan
-      dateEndFact: dateEndFact
-      dateEndPlan: dateEndPlan
-      amount: amount
-      amountPerUnit: amountPerUnit
-      isVat: isVat
-    # If current v8 requires extra self-promotion VAT fields, add their exact API names here.
-    # They will be produced with value 0 in the normalized dataset, then add to field_map too.
-    extra_zero_fields: []

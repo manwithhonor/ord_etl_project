@@ -6,10 +6,8 @@ from typing import Any, Iterable
 import pandas as pd
 import requests
 
-from exceptions import ConnectorError, SourceDataError
 
-
-class LiveDuneConnector:
+class LiveDuneClient:
     """Universal LiveDune reader with API and Excel fallback modes."""
 
     def __init__(self, config: dict[str, Any], api_token: str | None = None, session=None):
@@ -84,13 +82,29 @@ class LiveDuneConnector:
             return pd.DataFrame()
         return self.normalize_posts(pd.DataFrame(rows))
 
-    def extract_posts_excel(self, path: str | Path | None = None, sheet_name: Any = None) -> pd.DataFrame:
+    def extract_posts_excel(
+        self,
+        path: str | Path | None = None,
+        sheet_name: Any = None,
+    ) -> pd.DataFrame:
+        """Read a standard LiveDune export.
+
+        The real export supplied for this project has a sheet named ``Посты`` and
+        the required fields are ``Дата``, ``Ссылка`` and ``Просмотров``. LiveDune
+        also puts a final ``Итого:`` row in this sheet; normalize_posts removes it.
+        """
         excel_cfg = self.config.get("excel", {})
         path = Path(path or excel_cfg.get("path", "data/livedune_input.xlsx"))
-        sheet_name = excel_cfg.get("sheet_name", 0) if sheet_name is None else sheet_name
+        sheet_name = excel_cfg.get("sheet_name", "Посты") if sheet_name is None else sheet_name
         if not path.exists():
             raise SourceDataError(f"LiveDune Excel file not found: {path}")
-        df = pd.read_excel(path, sheet_name=sheet_name)
+        try:
+            df = pd.read_excel(path, sheet_name=sheet_name)
+        except ValueError as exc:
+            raise SourceDataError(
+                f"Cannot read LiveDune sheet {sheet_name!r} from {path}. "
+                "Expected the export sheet named 'Посты'."
+            ) from exc
         return self.normalize_posts(df)
 
     def normalize_posts(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -111,14 +125,40 @@ class LiveDuneConnector:
                 )
 
         out = df.rename(columns=rename).copy()
+
+        # LiveDune export contains a final aggregate row such as "Итого:" with no URL.
+        # Filter non-post rows before date/numeric conversion.
+        raw_url = out["post_url"]
+        raw_date = out["published_at"]
+        valid = raw_url.notna() & raw_date.notna()
+        valid &= raw_url.astype(str).str.strip().ne("")
+        valid &= ~raw_date.astype(str).str.strip().str.casefold().str.startswith("итого")
+        out = out.loc[valid].copy()
+
         out["post_url"] = out["post_url"].astype(str).str.strip()
-        out["published_at"] = pd.to_datetime(out["published_at"], errors="raise")
-        out["impressions_total"] = pd.to_numeric(out["impressions_total"], errors="raise").astype("int64")
+        out["published_at"] = pd.to_datetime(
+            out["published_at"],
+            errors="coerce",
+            dayfirst=bool(self.config.get("excel", {}).get("dayfirst", True)),
+        )
+        out["impressions_total"] = pd.to_numeric(out["impressions_total"], errors="coerce")
+
+        bad = out[out["published_at"].isna() | out["impressions_total"].isna()]
+        if not bad.empty:
+            examples = bad[["post_url"]].head(5).to_dict("records")
+            raise SourceDataError(
+                f"LiveDune contains post rows with invalid date/views values. Examples: {examples}"
+            )
+
+        out["impressions_total"] = out["impressions_total"].astype("int64")
         if "source_post_id" not in out.columns:
             out["source_post_id"] = out["post_url"]
         if "account_id" not in out.columns:
             out["account_id"] = ""
-        return out
+
+        return out[
+            ["source_post_id", "post_url", "published_at", "impressions_total", "account_id"]
+        ].reset_index(drop=True)
 
     def _items(self, data: dict[str, Any]) -> list[dict[str, Any]]:
         configured = self.config.get("pagination", {}).get("items_field", "response")
