@@ -45,7 +45,7 @@ class YandexClient:
             print(f"Status: {response.status_code}")
             print(f"Response: {response.text}")
         assert response.status_code == 200, f"Request failed with status {response.status_code}"
-        return response
+        return response.json()
 
     @_save_run
     def send_get_request(self, url, params=None, data=None):
@@ -56,12 +56,13 @@ class YandexClient:
         return self._request('POST', url, params, data)
 
     def get_status(self, request_id):
-        print("Get status")
+        print("Получаем статус")
         params = {"reqid": request_id}
         response = self.send_get_request(self.base_url + "/status", params=params)
-        return response.json()["status"]
+        return response["status"]
 
     def send_statistics(self, payload):
-        print("Send statistics")
+        print("Шлем статистику")
         response = self.send_post_request(self.base_url + "/statistics", data=payload)
-        return response
+        print(f"Статистика успешно загружена, request_id: {response['request_id']}" )
+        return response['request_id']

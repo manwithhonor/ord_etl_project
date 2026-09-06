@@ -51,9 +51,8 @@ class TestYandexClient(TestCase):
             "type": "other",
         }
         payload = {"statistics": [item_1, item_2]}
-        response = self.yandex_client.send_statistics(payload)
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual()
-        response = self.yandex_client.get_status(response['request_id'])
+        request_id = self.yandex_client.send_statistics(payload)
+        self.assertIsNotNone(request_id)
+        response = self.yandex_client.get_status(request_id)
         self.assertEqual(response, "ERIR sync success")
         print(response)
