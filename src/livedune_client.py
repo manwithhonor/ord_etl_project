@@ -1,169 +1,102 @@
-from __future__ import annotations
-
-from pathlib import Path
-from typing import Any, Iterable
-
+from datetime import datetime
+import json
+import os
+import time
 import pandas as pd
 import requests
 
 
 class LiveDuneClient:
-    """Universal LiveDune reader with API and Excel fallback modes."""
-
-    def __init__(self, config: dict[str, Any], api_token: str | None = None, session=None):
+    def __init__(self, config):
         self.config = config
-        self.base_url = config.get("base_url", "https://api.livedune.com").rstrip("/")
-        self.api_token = api_token
-        self.session = session or requests.Session()
-        self.timeout = int(config.get("timeout_seconds", 30))
+        self.token = os.environ[config['token']]
+        self.base_url = config['base_url']
+        self.account_dict = config['account_dict']
 
-    def _request(self, method: str, path: str, **kwargs) -> dict[str, Any]:
-        url = f"{self.base_url}/{path.lstrip('/')}"
-        params = dict(kwargs.pop("params", {}) or {})
-        headers = dict(kwargs.pop("headers", {}) or {})
+    def _save_run(func):
+        def wrapper(self, *args, **kwargs):
+            count_error = 0
+            return_value = None
+            while True:
+                try:
+                    return_value = func(self, *args, **kwargs)
+                    break
+                except (TimeoutError, AssertionError, ConnectionError, TypeError):
+                    print(f"{datetime.now().time().strftime('%H:%M:%S')} Connection to livedune may be lost. Waiting for 10 second and reconnecting.")
+                    return_value = None
+                    count_error += 1
+                    assert count_error != 3, "ERROR: livedune connection failed 3 times"
+                    time.sleep(10)
+            return return_value
+        return wrapper
 
-        auth = self.config.get("auth", {})
-        auth_style = auth.get("style", "query")
-        if self.api_token:
-            if auth_style == "query":
-                params.setdefault(auth.get("token_param", "access_token"), self.api_token)
-            elif auth_style == "bearer":
-                headers.setdefault("Authorization", f"Bearer {self.api_token}")
+    def _request(self, method, url, params=None, data=None):
+        params = params.copy() if params else {}
+        params["access_token"] = self.token
 
-        try:
-            response = self.session.request(
-                method=method,
-                url=url,
-                params=params,
-                headers=headers,
-                timeout=self.timeout,
-                **kwargs,
-            )
-            response.raise_for_status()
-            return response.json()
-        except (requests.RequestException, ValueError) as exc:
-            raise ConnectorError(f"LiveDune request failed: {method} {url}: {exc}") from exc
-
-    def get_accounts(self) -> list[dict[str, Any]]:
-        data = self._request("GET", self.config.get("accounts_endpoint", "/accounts"))
-        return self._items(data)
-
-    def get_posts(self, account_id: str) -> list[dict[str, Any]]:
-        endpoint = self.config.get("posts_endpoint", "/accounts/{account_id}/posts").format(
-            account_id=account_id
+        response = requests.request(
+            method=method,
+            url=url,
+            headers={
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+            },
+            params=params,
+            data=json.dumps(data) if data is not None else None
         )
-        pagination = self.config.get("pagination", {})
-        cursor_param = pagination.get("cursor_param", "after")
-        cursor_field = pagination.get("cursor_response_field", "after")
+        if response.status_code != 200:
+            print(f"URL: {url}")
+            print(f"Status: {response.status_code}")
+            print(f"Response: {response.text}")
+        assert response.status_code == 200, f"Request failed with status {response.status_code}"
+        return response.json()
 
-        result: list[dict[str, Any]] = []
-        cursor = None
-        seen_cursors: set[str] = set()
+    @_save_run
+    def send_post_request(self, url, params=None, data=None):
+        return self._request('POST', url, params=params, data=data)
+
+    @_save_run
+    def send_get_request(self, url, params=None):
+        return self._request('GET', url, params=params)
+
+
+    def get_with_pages(self, url, params=None):
+        params = params.copy() if params else {}
+        all_items = []
+        after = None
+        max_pages = 1000
+        page = 0
+
         while True:
-            params = {cursor_param: cursor} if cursor else {}
-            data = self._request("GET", endpoint, params=params)
-            page_items = self._items(data)
-            for item in page_items:
-                item = dict(item)
-                item.setdefault("account_id", account_id)
-                result.append(item)
+            # Добавляем 'after' начиная со второй страницы
+            if after not in (None, 0):
+                params["after"] = after
 
-            cursor = data.get(cursor_field)
-            if not cursor or not page_items or str(cursor) in seen_cursors:
+            data = self.send_get_request(url, params=params)
+            all_items.extend(data.get("response", []))
+            count = data.get("count", 0)
+            after = data.get("after")
+            page += 1
+
+            # Условие остановки: меньше 100 элементов или after пустой/ноль
+            if count < 100 or after in (None, 0):
                 break
-            seen_cursors.add(str(cursor))
-        return result
 
-    def extract_posts_api(self, account_ids: Iterable[str]) -> pd.DataFrame:
-        rows: list[dict[str, Any]] = []
-        for account_id in account_ids:
-            rows.extend(self.get_posts(str(account_id)))
-        if not rows:
-            return pd.DataFrame()
-        return self.normalize_posts(pd.DataFrame(rows))
+            if page >= max_pages:
+                print(f"Достигнут лимит страниц ({max_pages}), пагинация остановлена.")
+                break
+        return all_items
 
-    def extract_posts_excel(
-        self,
-        path: str | Path | None = None,
-        sheet_name: Any = None,
-    ) -> pd.DataFrame:
-        """Read a standard LiveDune export.
-
-        The real export supplied for this project has a sheet named ``Посты`` and
-        the required fields are ``Дата``, ``Ссылка`` and ``Просмотров``. LiveDune
-        also puts a final ``Итого:`` row in this sheet; normalize_posts removes it.
-        """
-        excel_cfg = self.config.get("excel", {})
-        path = Path(path or excel_cfg.get("path", "data/livedune_input.xlsx"))
-        sheet_name = excel_cfg.get("sheet_name", "Посты") if sheet_name is None else sheet_name
-        if not path.exists():
-            raise SourceDataError(f"LiveDune Excel file not found: {path}")
-        try:
-            df = pd.read_excel(path, sheet_name=sheet_name)
-        except ValueError as exc:
-            raise SourceDataError(
-                f"Cannot read LiveDune sheet {sheet_name!r} from {path}. "
-                "Expected the export sheet named 'Посты'."
-            ) from exc
-        return self.normalize_posts(df)
-
-    def normalize_posts(self, df: pd.DataFrame) -> pd.DataFrame:
-        aliases = self.config.get("column_aliases", {})
-        required = ["post_url", "published_at", "impressions_total"]
-        optional = ["source_post_id", "account_id"]
-        rename: dict[str, str] = {}
-
-        for target in required + optional:
-            candidates = aliases.get(target, [target])
-            found = next((c for c in candidates if c in df.columns), None)
-            if found:
-                rename[found] = target
-            elif target in required:
-                raise SourceDataError(
-                    f"Cannot find required LiveDune column '{target}'. Tried: {candidates}. "
-                    f"Available: {list(df.columns)}"
-                )
-
-        out = df.rename(columns=rename).copy()
-
-        # LiveDune export contains a final aggregate row such as "Итого:" with no URL.
-        # Filter non-post rows before date/numeric conversion.
-        raw_url = out["post_url"]
-        raw_date = out["published_at"]
-        valid = raw_url.notna() & raw_date.notna()
-        valid &= raw_url.astype(str).str.strip().ne("")
-        valid &= ~raw_date.astype(str).str.strip().str.casefold().str.startswith("итого")
-        out = out.loc[valid].copy()
-
-        out["post_url"] = out["post_url"].astype(str).str.strip()
-        out["published_at"] = pd.to_datetime(
-            out["published_at"],
-            errors="coerce",
-            dayfirst=bool(self.config.get("excel", {}).get("dayfirst", True)),
-        )
-        out["impressions_total"] = pd.to_numeric(out["impressions_total"], errors="coerce")
-
-        bad = out[out["published_at"].isna() | out["impressions_total"].isna()]
-        if not bad.empty:
-            examples = bad[["post_url"]].head(5).to_dict("records")
-            raise SourceDataError(
-                f"LiveDune contains post rows with invalid date/views values. Examples: {examples}"
-            )
-
-        out["impressions_total"] = out["impressions_total"].astype("int64")
-        if "source_post_id" not in out.columns:
-            out["source_post_id"] = out["post_url"]
-        if "account_id" not in out.columns:
-            out["account_id"] = ""
-
-        return out[
-            ["source_post_id", "post_url", "published_at", "impressions_total", "account_id"]
-        ].reset_index(drop=True)
-
-    def _items(self, data: dict[str, Any]) -> list[dict[str, Any]]:
-        configured = self.config.get("pagination", {}).get("items_field", "response")
-        for key in (configured, "response", "data", "items", "results"):
-            value = data.get(key)
-            if isinstance(value, list):
-                return value
-        return []
+    def get_data(self):
+        print("Скачиваем данные с livedune")
+        livedune_df = pd.DataFrame()
+        for platform in self.account_dict:
+            params = {"date_from": "2026-01-01",
+                      "date_to": datetime.now().date().strftime('%Y-%m-%d')}
+            posts = self.get_with_pages(f"{self.config['base_url']}/{self.account_dict[platform]}/posts", params)
+            df = pd.DataFrame(posts)
+            df['current_views'] = df['impressions'].apply(lambda x: x['total'])
+            df['platform'] = platform
+            df = df.rename(columns={'url': 'platform_url'})
+            livedune_df = pd.concat([livedune_df, df[['platform', 'platform_url', 'current_views']]], ignore_index=True)
+        return livedune_df

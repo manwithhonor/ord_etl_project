@@ -1,44 +1,33 @@
 app:
-  report_month: "2026-08"       # reporting month, YYYY-MM
-  dry_run: true                  # safe default: do not POST to ORD
-  force_recalculate: false
-  skip_zero_impressions: true
-  log_level: INFO
-  preview_csv: statics/ord_statistics_preview.csv
+  report_date: "2026-09-30"
+  dry_run: true
 
 livedune:
-  # Real export for this project was verified in Excel mode:
-  # sheet "Посты", columns "Дата" + "Ссылка" + "Просмотров".
-  mode: excel                    # excel | api
-  base_url: "https://api.livedune.com"
-  api_token_env: LIVEDUNE_API_TOKEN
-  timeout_seconds: 30
-  account_ids: []
-  accounts_endpoint: "/accounts"
-  # API mode is still a draft until the exact LiveDune analytics route is confirmed.
-  posts_endpoint: "/accounts/{account_id}/posts"
-  auth:
-    style: query                 # query | bearer
-    token_param: access_token
-  pagination:
-    items_field: response
-    cursor_response_field: after
-    cursor_param: after
-  excel:
-    path: data/livedune_input.xlsx
-    sheet_name: "Посты"
-    dayfirst: true
-  column_aliases:
-    source_post_id: [source_post_id, post_id, id, ID]
-    post_url: [post_url, url, URL, "Ссылка", "Ссылка на публикацию"]
-    published_at: [published_at, created, date, "Дата", "Дата публикации"]
-    impressions_total: [impressions_total, views, impressions, "Просмотров", "Просмотры", "Показы"]
-    account_id: [account_id, account, profile, "Аккаунт"]
+  base_url: "https://api.livedune.com/accounts"
+  token: LIVEDUNE_API_TOKEN
+  account_dict:
+    "ВК": 3453313
+    "МАХ": 3369918
+    "Телеграм": 3050607
+
+google:
+  google_sheet_url: "https://docs.google.com/spreadsheets/d/1YRn7y_pTmBcj9YGCXSPX1SnQRulvFgR59PKn8NB6yMw"
+  worksheet_name: "auto_table"
+  worksheet_id: "1212522662"
+  credentials_path: "statics/credentials.json"
+  scope: ['https://spreadsheets.google.com/feeds',
+          'https://www.googleapis.com/auth/spreadsheets',
+          'https://www.googleapis.com/auth/drive.file',
+          'https://www.googleapis.com/auth/drive' ]
 
 yandex:
   base_url: "https://ord.yandex.net/api/v8"
   token: YANDEX_ORD_OAUTH_TOKEN
   timeout_seconds: 30
+  platform_dict:
+    "ВК": "c2dEzzKA3ZjtSewXRvQ5Ao"
+    "МАХ": "qG9XK9A9nxLdrqgEumzNLy"
+    "Телеграм": "MbbgH4gydcfc5gf647uoFP"
   endpoints:
     statistics: "/api/{api_version}/statistics"
     status: "/api/{api_version}/status"

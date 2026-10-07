@@ -59,6 +59,8 @@ class YandexClient:
         print("Получаем статус")
         params = {"reqid": request_id}
         response = self.send_get_request(self.base_url + "/status", params=params)
+        assert response['status'] == "ERIR sync success", "sync failed"
+        print(f"Статистика успешно синхронизирована, status: {response['status']}")
         return response["status"]
 
     def send_statistics(self, payload):
