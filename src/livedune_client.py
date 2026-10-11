@@ -4,6 +4,9 @@ import os
 import time
 import pandas as pd
 import requests
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class LiveDuneClient:
@@ -22,7 +25,7 @@ class LiveDuneClient:
                     return_value = func(self, *args, **kwargs)
                     break
                 except (TimeoutError, AssertionError, ConnectionError, TypeError):
-                    print(f"{datetime.now().time().strftime('%H:%M:%S')} Connection to livedune may be lost. Waiting for 10 second and reconnecting.")
+                    logger.info(f"{datetime.now().time().strftime('%H:%M:%S')} Connection to livedune may be lost. Waiting for 10 second and reconnecting.")
                     return_value = None
                     count_error += 1
                     assert count_error != 3, "ERROR: livedune connection failed 3 times"
@@ -45,9 +48,9 @@ class LiveDuneClient:
             data=json.dumps(data) if data is not None else None
         )
         if response.status_code != 200:
-            print(f"URL: {url}")
-            print(f"Status: {response.status_code}")
-            print(f"Response: {response.text}")
+            logger.info(f"URL: {url}")
+            logger.info(f"Status: {response.status_code}")
+            logger.info(f"Response: {response.text}")
         assert response.status_code == 200, f"Request failed with status {response.status_code}"
         return response.json()
 
@@ -83,12 +86,12 @@ class LiveDuneClient:
                 break
 
             if page >= max_pages:
-                print(f"Достигнут лимит страниц ({max_pages}), пагинация остановлена.")
+                logger.info(f"Достигнут лимит страниц ({max_pages}), пагинация остановлена.")
                 break
         return all_items
 
     def get_data(self):
-        print("Скачиваем данные с livedune")
+        logger.info("Скачиваем данные с livedune")
         livedune_df = pd.DataFrame()
         for platform in self.account_dict:
             params = {"date_from": "2026-01-01",

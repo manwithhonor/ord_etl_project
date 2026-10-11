@@ -1,6 +1,5 @@
 app:
   report_date: "2026-09-30"
-  dry_run: true
 
 livedune:
   base_url: "https://api.livedune.com/accounts"
@@ -12,9 +11,10 @@ livedune:
 
 google:
   google_sheet_url: "https://docs.google.com/spreadsheets/d/1YRn7y_pTmBcj9YGCXSPX1SnQRulvFgR59PKn8NB6yMw"
+  backup_path: "backup.xlsx"
   worksheet_name: "auto_table"
   worksheet_id: "1212522662"
-  credentials_path: "statics/credentials.json"
+  credentials_path: "credentials.json"
   scope: ['https://spreadsheets.google.com/feeds',
           'https://www.googleapis.com/auth/spreadsheets',
           'https://www.googleapis.com/auth/drive.file',

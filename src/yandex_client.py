@@ -4,6 +4,10 @@ import os
 import time
 import requests
 
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 class YandexClient:
     def __init__(self, config):
@@ -19,7 +23,7 @@ class YandexClient:
                     return_value = func(self, *args, **kwargs)
                     break
                 except (TimeoutError, AssertionError, ConnectionError, TypeError):
-                    print(f"{datetime.datetime.now().time().strftime('%H:%M:%S')} Connection to wb may be lost. Waiting for 30 second and reconnecting.")
+                    logger.info(f"{datetime.datetime.now().time().strftime('%H:%M:%S')} Connection to wb may be lost. Waiting for 30 second and reconnecting.")
                     return_value = None
                     count_error += 1
                     assert count_error != 3, "ERROR: wb connection failed 3 times"
@@ -41,9 +45,9 @@ class YandexClient:
             data=json.dumps(data) if data is not None else None
         )
         if response.status_code != 200:
-            print(f"URL: {url}")
-            print(f"Status: {response.status_code}")
-            print(f"Response: {response.text}")
+            logger.info(f"URL: {url}")
+            logger.info(f"Status: {response.status_code}")
+            logger.info(f"Response: {response.text}")
         assert response.status_code == 200, f"Request failed with status {response.status_code}"
         return response.json()
 
@@ -56,15 +60,15 @@ class YandexClient:
         return self._request('POST', url, params, data)
 
     def get_status(self, request_id):
-        print("Получаем статус")
+        logger.info("Получаем статус")
         params = {"reqid": request_id}
         response = self.send_get_request(self.base_url + "/status", params=params)
         assert response['status'] == "ERIR sync success", "sync failed"
-        print(f"Статистика успешно синхронизирована, status: {response['status']}")
+        logger.info(f"Статистика успешно синхронизирована, status: {response['status']}")
         return response["status"]
 
     def send_statistics(self, payload):
-        print("Шлем статистику")
+        logger.info("Шлем статистику")
         response = self.send_post_request(self.base_url + "/statistics", data=payload)
-        print(f"Статистика успешно загружена, request_id: {response['request_id']}" )
+        logger.info(f"Статистика успешно загружена, request_id: {response['request_id']}" )
         return response['request_id']

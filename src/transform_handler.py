@@ -1,5 +1,8 @@
 import pandas as pd
+import logging
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 class TransformHandler:
     def __init__(self, config):
@@ -125,7 +128,7 @@ class TransformHandler:
         return to_google_df, to_yandex_df
 
     def transform_to_yandex_data(self, df) -> dict:
-        print("Преобразуем данные")
+        logger.info("Преобразуем данные")
         df = self._process_columns_for_yandex(df)
         df = self._process_dt_columns_for_yandex(df)
         payload = self._make_payload_for_yandex(df)

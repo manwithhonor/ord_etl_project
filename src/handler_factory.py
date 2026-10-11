@@ -1,9 +1,12 @@
 import pandas as pd
+import logging
 from src.transform_handler import TransformHandler
 from src.livedune_client import LiveDuneClient
 from src.google_client import GoogleClient
 from src.yandex_client import YandexClient
 
+
+logger = logging.getLogger(__name__)
 
 class HandlerFactory:
     def __init__(self, config):
@@ -24,14 +27,15 @@ class HandlerFactory:
         return to_google_df, payload
 
     def _load(self, to_google_df, payload) -> None:
+        self.google_client.send_data(to_google_df)
+
         yandex_client = YandexClient(self.config["yandex"])
         request_id = yandex_client.send_statistics(payload)
         response = yandex_client.get_status(request_id)
 
-        self.google_client.send_data(to_google_df)
-
     def run(self):
+        logger.info("Начинаем работу скрипта")
         livedune_df, google_df = self._extract()
         to_google_df, payload = self._transform(livedune_df, google_df)
         self._load(to_google_df, payload)
-        print("Готово")
+        logger.info("Готово")
